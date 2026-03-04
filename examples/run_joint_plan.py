@@ -720,6 +720,7 @@ if __name__ == '__main__':
     asset_folder = os.path.join(project_base_dir, './assets')
     assembly_dir = os.path.join(asset_folder, args.dir, args.id)
 
+    record_path = None
     if args.record_dir is None:
         record_path = None
     elif args.render:
