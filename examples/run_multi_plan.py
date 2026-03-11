@@ -88,6 +88,7 @@ class RandomSequencePlanner(SequencePlanner):
             still_ids = all_ids.copy()
             still_ids.remove(move_id)
 
+            record_path = None
             if record_dir is None:
                 record_path = None
             elif render:
@@ -269,6 +270,7 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
             still_ids = all_ids.copy()
             still_ids.remove(move_id)
 
+            record_path = None
             if record_dir is None:
                 record_path = None
             elif render:

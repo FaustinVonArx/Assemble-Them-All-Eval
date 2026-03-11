@@ -52,3 +52,4 @@ dependencies:
     - typing-extensions==4.0.1
     - wcwidth==0.2.5
     - zipp==3.6.0
+    - ffmpeg==1.4.2 # added for video recording in the wrapper
