@@ -69,7 +69,7 @@ class SequencePlanner:
 class RandomSequencePlanner(SequencePlanner):
 
     def plan_sequence(self, path_planner_name, rotation, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-        seq_max_time, path_max_time, seed, render, record_dir, save_dir, n_save_state, verbose=False):
+        seq_max_time, path_max_time, seed, render, record_dir, save_dir, n_save_state, verbose=False, max_iterations=None):
 
         np.random.seed(seed)
 
@@ -139,7 +139,7 @@ class RandomSequencePlanner(SequencePlanner):
 class QueueSequencePlanner(SequencePlanner):
 
     def plan_sequence(self, path_planner_name, rotation, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-        seq_max_time, path_max_time, seed, render, record_dir, save_dir, n_save_state, verbose=False):
+        seq_max_time, path_max_time, seed, render, record_dir, save_dir, n_save_state, verbose=False, max_iterations=None):
 
         np.random.seed(seed)
 
@@ -247,7 +247,7 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
             return status, t_plan
 
     def plan_sequence(self, path_planner_name, rotation, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-        seq_max_time, path_max_time, seed, render, record_dir, save_dir, n_save_state, verbose=False):
+        seq_max_time, path_max_time, seed, render, record_dir, save_dir, n_save_state, max_iterations=None, verbose=False):
 
         np.random.seed(seed)
 
@@ -269,6 +269,7 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
             move_id, max_depth = active_queue.pop(0)
             still_ids = all_ids.copy()
             still_ids.remove(move_id)
+            assemblable = True
 
             record_path = None
             if record_dir is None:
@@ -322,11 +323,18 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
                 seq_status = 'Timeout'
                 break
 
+            if max_iterations is not None and all(x < max_iterations for _, x in active_queue + inactive_queue):
+                if verbose:
+                    print(f'Max iterations ({max_iterations}) exceeded for all remaining parts. Terminating.')
+                seq_status = 'Timeout'
+                assemblable = False
+                break
+
         if verbose:
             print(f'Result: {seq_status} | Disassembled: {len(sequence)}/{self.num_parts - 1} | Total # trials: {seq_count} | Total planning time: {t_plan_all}')
             print(f'Sequence: {sequence}')
 
-        return seq_status, sequence, seq_count, t_plan_all
+        return seq_status, sequence, seq_count, t_plan_all, assemblable
 
 
 def get_seq_planner(name):
@@ -360,6 +368,7 @@ if __name__ == '__main__':
     parser.add_argument('--record-dir', type=str, default=None, help='directory to store rendering results')
     parser.add_argument('--save-dir', type=str, default=None)
     parser.add_argument('--n-save-state', type=int, default=100)
+    parser.add_argument('--max-iterations', type=int, default=None)
     args = parser.parse_args()
 
     asset_folder = os.path.join(project_base_dir, './assets')
@@ -369,7 +378,8 @@ if __name__ == '__main__':
         
     clear_saved_sdfs(assembly_dir)
     seq_planner = get_seq_planner(args.seq_planner)(asset_folder, assembly_dir)
-    seq_status, sequence, seq_count, t_plan = seq_planner.plan_sequence(args.path_planner, 
+    seq_status, sequence, seq_count, t_plan, assemblable = seq_planner.plan_sequence(args.path_planner, 
         args.rotation, args.body_type, args.sdf_dx, args.collision_th, args.force_mag, args.frame_skip,
-        args.seq_max_time, args.path_max_time, args.seed, args.render, args.record_dir, args.save_dir, args.n_save_state, verbose=True)
+        args.seq_max_time, args.path_max_time, args.seed, args.render, args.record_dir, args.save_dir, args.n_save_state, verbose=True, max_iterations=args.max_iterations)
     clear_saved_sdfs(assembly_dir)
+    print(f'Final result for assembly {args.id}: {seq_status} | Sequence: {sequence} | Assemblable: {assemblable}')
