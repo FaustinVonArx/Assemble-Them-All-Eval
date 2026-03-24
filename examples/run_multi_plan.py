@@ -12,6 +12,8 @@ from assets.load import load_assembly
 from assets.save import clear_saved_sdfs
 from run_joint_plan import get_planner as get_path_planner
 
+import time
+
 
 class SequencePlanner:
 
@@ -46,7 +48,7 @@ class SequencePlanner:
         raise NotImplementedError
 
     def plan_path(self, move_id, still_ids, planner_name, rotation, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-        max_time, seed, render, record_path, save_dir, n_save_state, return_contact=False):
+        max_time, seed, render, record_path, save_dir, n_save_state, return_contact=False, verbose=False):
 
         path_planner = get_path_planner(planner_name)(
             self.asset_folder, self.assembly_dir,
@@ -227,14 +229,14 @@ class QueueSequencePlanner(SequencePlanner):
 class ProgressiveQueueSequencePlanner(SequencePlanner):
 
     def plan_path(self, move_id, still_ids, planner_name, rotation, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-        max_time, max_depth, seed, render, record_path, save_dir, n_save_state, return_contact=False):
+        max_time, max_depth, seed, render, record_path, save_dir, n_save_state, return_contact=False, verbose=False):
 
         path_planner = get_path_planner(planner_name)(
             self.asset_folder, self.assembly_dir,
             move_id, still_ids,
             rotation, body_type, sdf_dx, collision_th, force_mag, frame_skip, save_sdf=True
         )
-        status, t_plan, path = path_planner.plan(max_time, max_depth=max_depth, seed=seed, return_path=True, render=render, record_path=record_path)
+        status, t_plan, path = path_planner.plan(max_time, max_depth=max_depth, seed=seed, return_path=True, render=render, record_path=record_path, verbose=verbose)
 
         assert status in self.valid_status, f'unknown status {status}'
         if save_dir is not None:
@@ -263,6 +265,9 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
         np.random.shuffle(active_queue)
         inactive_queue = [] # [(id, depth)] nodes tried
 
+        if verbose:
+            print(f'Initial active queue: {active_queue}')
+
         while True:
 
             all_ids = list(self.graph.nodes)
@@ -286,13 +291,13 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
 
             status, t_plan = self.plan_path(move_id, still_ids,
                 path_planner_name, False, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-                path_max_time, max_depth, curr_seed, render, record_path, curr_save_dir, n_save_state)
+                path_max_time, max_depth, curr_seed, render, record_path, curr_save_dir, n_save_state, verbose=verbose)
             assert status in self.valid_status
             
             if status in self.failure_status and rotation:
                 status, t_plan_rot = self.plan_path(move_id, still_ids,
                     path_planner_name, True, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-                    path_max_time, max_depth, curr_seed, render, record_path, curr_save_dir, n_save_state)
+                    path_max_time, max_depth, curr_seed, render, record_path, curr_save_dir, n_save_state, verbose=verbose)
                 t_plan += t_plan_rot
 
             t_plan_all += t_plan
@@ -323,7 +328,7 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
                 seq_status = 'Timeout'
                 break
 
-            if max_iterations is not None and all(x < max_iterations for _, x in active_queue + inactive_queue):
+            if max_iterations is not None and all(x > max_iterations for _, x in active_queue + inactive_queue):
                 if verbose:
                     print(f'Max iterations ({max_iterations}) exceeded for all remaining parts. Terminating.')
                 seq_status = 'Timeout'
@@ -369,6 +374,8 @@ if __name__ == '__main__':
     parser.add_argument('--save-dir', type=str, default=None)
     parser.add_argument('--n-save-state', type=int, default=100)
     parser.add_argument('--max-iterations', type=int, default=None)
+    parser.add_argument('--verbose', action='store_true', help='whether to print detailed logs during planning')
+    parser.add_argument('--use-previous-sdf', action='store_true', help='whether to use previously saved SDFs for faster planning')
     args = parser.parse_args()
 
     asset_folder = os.path.join(project_base_dir, './assets')
@@ -376,10 +383,14 @@ if __name__ == '__main__':
 
     if args.rotation: args.seq_max_time *= 2
         
-    clear_saved_sdfs(assembly_dir)
+    if not args.use_previous_sdf:
+        clear_saved_sdfs(assembly_dir)
+
+    if args.verbose:
+        print(f'Running sequence planner')
     seq_planner = get_seq_planner(args.seq_planner)(asset_folder, assembly_dir)
     seq_status, sequence, seq_count, t_plan, assemblable = seq_planner.plan_sequence(args.path_planner, 
         args.rotation, args.body_type, args.sdf_dx, args.collision_th, args.force_mag, args.frame_skip,
-        args.seq_max_time, args.path_max_time, args.seed, args.render, args.record_dir, args.save_dir, args.n_save_state, verbose=True, max_iterations=args.max_iterations)
-    clear_saved_sdfs(assembly_dir)
+        args.seq_max_time, args.path_max_time, args.seed, args.render, args.record_dir, args.save_dir, args.n_save_state, verbose=args.verbose, max_iterations=args.max_iterations)
+    #clear_saved_sdfs(assembly_dir)
     print(f'Final result for assembly {args.id}: {seq_status} | Sequence: {sequence} | Assemblable: {assemblable}')

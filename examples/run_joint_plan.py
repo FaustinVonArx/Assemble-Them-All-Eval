@@ -508,7 +508,7 @@ class BFSPlanner(PhysicsPlanner):
         else:
             return self.plan_trans(*args, **kwargs)
 
-    def plan_trans(self, max_time, max_depth=None, seed=1, return_path=False, render=False, record_path=None):
+    def plan_trans(self, max_time, max_depth=None, seed=1, return_path=False, render=False, record_path=None, verbose=False):
 
         self.seed(seed)
 
@@ -532,13 +532,20 @@ class BFSPlanner(PhysicsPlanner):
 
         n_stages = 0
 
+        if verbose:
+            print(f'Starting BFS with max_time {max_time}s, max_depth {max_depth}, seed {seed}')
+
         while True: # stages
 
             state, curr_path = states.pop(0)
 
             for action in actions:
 
+                if verbose:
+                    print(f'Stage {n_stages}, action {action}, queue size {len(states)}')
+                    
                 temp_path = curr_path.copy()
+                visited = False
 
                 self.sim.reset()
                 self.set_state(state)
@@ -561,24 +568,38 @@ class BFSPlanner(PhysicsPlanner):
                     if self.is_disassembled():
                         status = 'Success'
                         path = temp_path
+                        if verbose:
+                            print(f'Success at stage {n_stages}, action {action}, time {t_plan:.2f}s')
                         break
 
                     if status == 'Timeout':
                         break
 
-                    if self.any_state_similar(temp_path[:-self.frame_skip], new_state.q):
+                    visited = self.any_state_similar(temp_path[:-self.frame_skip], new_state.q)
+                    if visited:
+                        if verbose:
+                            print(f'Revisited state at stage {n_stages}, action {action}, time {t_plan:.2f}s')
                         break # back and forth
 
                 if status in ['Success', 'Timeout']:
                     break
 
-                states.append([new_state, temp_path])
+                if not visited:
+                    states.append([new_state, temp_path])
+                    if verbose:
+                        print(f'Stage {n_stages}: added new state, queue size {len(states)}')
 
             if status in ['Success', 'Timeout']:
                 break
 
+            if verbose:
+                print(f'Completed stage {n_stages}')
             n_stages += 1
             if n_stages == max_depth:
+                break
+            if len(states) == 0: #Explored all states and made no progress => Not assemblable
+                if verbose:
+                    print(f'No more states to explore at stage {n_stages}, terminating with failure')
                 break
 
         if render:
@@ -586,7 +607,7 @@ class BFSPlanner(PhysicsPlanner):
 
         return (status, t_plan, path) if return_path else (status, t_plan)
 
-    def plan_rot(self, max_time, max_depth=None, seed=1, return_path=False, render=False, record_path=None):
+    def plan_rot(self, max_time, max_depth=None, seed=1, return_path=False, render=False, record_path=None, verbose=False):
 
         self.seed(seed)
 
@@ -616,6 +637,10 @@ class BFSPlanner(PhysicsPlanner):
 
         n_stages = 0
 
+        if verbose:
+            print(f'Starting BFS (rot) with max_time {max_time}s, max_depth {max_depth}, seed {seed}')
+
+
         while True: # stages
 
             stage_states = []
@@ -626,7 +651,11 @@ class BFSPlanner(PhysicsPlanner):
 
                 for action in actions:
 
+                    if verbose:
+                        print(f'Stage {n_stages}, action {action}, queue size {len(states)}')
+                    
                     temp_path = curr_path.copy()
+                    visited = False
 
                     self.sim.reset()
                     self.set_state(state)
@@ -649,23 +678,26 @@ class BFSPlanner(PhysicsPlanner):
                         if self.is_disassembled():
                             status = 'Success'
                             path = temp_path
+                            if verbose:
+                                print(f'Success at stage {n_stages}, action {action}, time {t_plan:.2f}s')
                             break
 
                         if status == 'Timeout':
                             break
 
-                        if self.any_state_similar(temp_path[:-self.frame_skip], new_state.q):
-                            # print(action, 'back and forth break')
+                        visited = self.any_state_similar(temp_path[:-self.frame_skip], new_state.q)
+                        if visited:
+                            if verbose:
+                               print(f'Revisited state at stage {n_stages}, action {action}, time {t_plan:.2f}s')
                             break # back and forth
 
                     if status in ['Success', 'Timeout']:
                         break
 
-                    stage_states.append([new_state, temp_path])
-
-                    # if render:
-                    #     print(f'Stage: {n_stages}, Action: {action}, Queue size: {len(states)}')
-                    #     self.render(temp_path, record_path=record_path)
+                    if not visited:
+                        stage_states.append([new_state, temp_path])
+                        if verbose:
+                            print(f'Stage {n_stages}: added new state, queue size {len(stage_states)}')
 
                 if status in ['Success', 'Timeout']:
                     break
@@ -673,10 +705,16 @@ class BFSPlanner(PhysicsPlanner):
             if status in ['Success', 'Timeout']:
                 break
 
-            states = sorted(stage_states, key=lambda x: -len(x[1])) # sort based on path length
+            if verbose:
+                print(f'Completed stage {n_stages}, queue size {len(stage_states)}')
             n_stages += 1
             if n_stages == max_depth:
                 break
+            if len(states) == 0: #Explored all states and made no progress => Not assemblable
+                if verbose:
+                    print(f'No more states to explore at stage {n_stages}, terminating with failure')
+                break
+            states = sorted(stage_states, key=lambda x: -len(x[1])) # sort based on path length
 
         if render:
             self.render(path, record_path=record_path)
