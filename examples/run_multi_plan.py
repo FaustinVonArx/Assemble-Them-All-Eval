@@ -114,13 +114,13 @@ class RandomSequencePlanner(SequencePlanner):
 
             status, t_plan = self.plan_path(move_id, still_ids,
                 path_planner_name, False, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-                path_max_time, max_depth, curr_seed, render, record_path, curr_save_dir, n_save_state)
+                path_max_time, curr_seed, render, record_path, curr_save_dir, n_save_state)
             assert status in self.valid_status
             
             if status in self.failure_status and rotation:
                 status, t_plan_rot = self.plan_path(move_id, still_ids,
                     path_planner_name, True, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-                    path_max_time, max_depth, curr_seed, render, record_path, curr_save_dir, n_save_state)
+                    path_max_time, curr_seed, render, record_path, curr_save_dir, n_save_state)
                 t_plan += t_plan_rot
 
             t_plan_all += t_plan
@@ -188,13 +188,13 @@ class QueueSequencePlanner(SequencePlanner):
 
             status, t_plan = self.plan_path(move_id, still_ids,
                 path_planner_name, False, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-                path_max_time, max_depth, curr_seed, render, record_path, curr_save_dir, n_save_state)
+                path_max_time, curr_seed, render, record_path, curr_save_dir, n_save_state)
             assert status in self.valid_status
             
             if status in self.failure_status and rotation:
                 status, t_plan_rot = self.plan_path(move_id, still_ids,
                     path_planner_name, True, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-                    path_max_time, max_depth, curr_seed, render, record_path, curr_save_dir, n_save_state)
+                    path_max_time, curr_seed, render, record_path, curr_save_dir, n_save_state)
                 t_plan += t_plan_rot
 
             t_plan_all += t_plan
