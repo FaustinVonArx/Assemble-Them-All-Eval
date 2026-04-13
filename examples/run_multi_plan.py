@@ -7,10 +7,11 @@ sys.path.append(project_base_dir)
 
 import numpy as np
 import networkx as nx
+import itertools
 
 from assets.load import load_assembly
 from assets.save import clear_saved_sdfs
-from run_joint_plan import get_planner as get_path_planner
+from .run_joint_plan import get_planner as get_path_planner
 
 import time
 
@@ -48,21 +49,29 @@ class SequencePlanner:
         raise NotImplementedError
 
     def plan_path(self, move_id, still_ids, planner_name, rotation, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-        max_time, seed, render, record_path, save_dir, n_save_state, return_contact=False, verbose=False):
+        max_time, max_depth, seed, render, record_path, save_dir, n_save_state, return_contact=False, verbose=False, two_angles=False):
+
+        # Ensure move_id and still_ids are passed correctly if move_id is a tuple/list
+        if isinstance(move_id, tuple) or isinstance(move_id, list):
+            move_id_for_planner = list(move_id)
+            move_id_str = '_'.join(move_id)
+        else:
+            move_id_for_planner = move_id
+            move_id_str = str(move_id)
 
         path_planner = get_path_planner(planner_name)(
             self.asset_folder, self.assembly_dir,
-            move_id, still_ids,
+            move_id_for_planner, still_ids,
             rotation, body_type, sdf_dx, collision_th, force_mag, frame_skip, save_sdf=True
         )
-        status, t_plan, path = path_planner.plan(max_time, seed=seed, return_path=True, render=render, record_path=record_path)
+        status, t_plan, path = path_planner.plan(max_time, max_depth=max_depth, seed=seed, return_path=True, render=render, record_path=record_path, verbose=verbose, two_angles=two_angles)
 
         assert status in self.valid_status, f'unknown status {status}'
         if save_dir is not None:
             path_planner.save_path(path, save_dir, n_save_state)
 
         if return_contact:
-            contact_parts = path_planner.get_contact_bodies(move_id)
+            contact_parts = path_planner.get_contact_bodies(move_id_for_planner)
             return status, t_plan, contact_parts
         else:
             return status, t_plan
@@ -105,13 +114,13 @@ class RandomSequencePlanner(SequencePlanner):
 
             status, t_plan = self.plan_path(move_id, still_ids,
                 path_planner_name, False, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-                path_max_time, curr_seed, render, record_path, curr_save_dir, n_save_state)
+                path_max_time, max_depth, curr_seed, render, record_path, curr_save_dir, n_save_state)
             assert status in self.valid_status
             
             if status in self.failure_status and rotation:
                 status, t_plan_rot = self.plan_path(move_id, still_ids,
                     path_planner_name, True, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-                    path_max_time, curr_seed, render, record_path, curr_save_dir, n_save_state)
+                    path_max_time, max_depth, curr_seed, render, record_path, curr_save_dir, n_save_state)
                 t_plan += t_plan_rot
 
             t_plan_all += t_plan
@@ -179,13 +188,13 @@ class QueueSequencePlanner(SequencePlanner):
 
             status, t_plan = self.plan_path(move_id, still_ids,
                 path_planner_name, False, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-                path_max_time, curr_seed, render, record_path, curr_save_dir, n_save_state)
+                path_max_time, max_depth, curr_seed, render, record_path, curr_save_dir, n_save_state)
             assert status in self.valid_status
             
             if status in self.failure_status and rotation:
                 status, t_plan_rot = self.plan_path(move_id, still_ids,
                     path_planner_name, True, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-                    path_max_time, curr_seed, render, record_path, curr_save_dir, n_save_state)
+                    path_max_time, max_depth, curr_seed, render, record_path, curr_save_dir, n_save_state)
                 t_plan += t_plan_rot
 
             t_plan_all += t_plan
@@ -198,7 +207,7 @@ class QueueSequencePlanner(SequencePlanner):
                 self.graph.remove_node(move_id)
                 sequence.append(move_id)
             else:
-                inactive_queue.append(move_id)
+                inactive_queue.append([move_id, max_depth + 1])
 
             if verbose:
                 print('Active queue:', active_queue)
@@ -229,27 +238,35 @@ class QueueSequencePlanner(SequencePlanner):
 class ProgressiveQueueSequencePlanner(SequencePlanner):
 
     def plan_path(self, move_id, still_ids, planner_name, rotation, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-        max_time, max_depth, seed, render, record_path, save_dir, n_save_state, return_contact=False, verbose=False):
+        max_time, max_depth, seed, render, record_path, save_dir, n_save_state, return_contact=False, verbose=False, two_angles=False):
+        
+        # Ensure move_id and still_ids are passed correctly if move_id is a tuple/list
+        if isinstance(move_id, tuple) or isinstance(move_id, list):
+            move_id_for_planner = list(move_id)
+            move_id_str = '_'.join(move_id)
+        else:
+            move_id_for_planner = move_id
+            move_id_str = str(move_id)
 
         path_planner = get_path_planner(planner_name)(
             self.asset_folder, self.assembly_dir,
-            move_id, still_ids,
+            move_id_for_planner, still_ids,
             rotation, body_type, sdf_dx, collision_th, force_mag, frame_skip, save_sdf=True
         )
-        status, t_plan, path = path_planner.plan(max_time, max_depth=max_depth, seed=seed, return_path=True, render=render, record_path=record_path, verbose=verbose)
+        status, t_plan, path = path_planner.plan(max_time, max_depth=max_depth, seed=seed, return_path=True, render=render, record_path=record_path, verbose=verbose, two_angles=two_angles)
 
         assert status in self.valid_status, f'unknown status {status}'
         if save_dir is not None:
             path_planner.save_path(path, save_dir, n_save_state)
 
         if return_contact:
-            contact_parts = path_planner.get_contact_bodies(move_id)
+            contact_parts = path_planner.get_contact_bodies(move_id_for_planner)
             return status, t_plan, contact_parts
         else:
             return status, t_plan
 
     def plan_sequence(self, path_planner_name, rotation, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-        seq_max_time, path_max_time, seed, render, record_dir, save_dir, n_save_state, max_iterations=None, verbose=False):
+        seq_max_time, path_max_time, seed, render, record_dir, save_dir, n_save_state, max_iterations=None, verbose=False, two_angles=False, max_moving_parts=1):
 
         np.random.seed(seed)
 
@@ -260,10 +277,21 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
         sequence = []
         seq_count = 0
         t_plan_all = 0
+        assemblable = True
 
-        active_queue = [(node, 1) for node in self.graph.nodes] # [(id, depth)] nodes going to try
-        np.random.shuffle(active_queue)
-        inactive_queue = [] # [(id, depth)] nodes tried
+        def generate_queue(nodes, depth, max_moving):
+            queue = []
+            max_k = min(max_moving, len(nodes) // 2)
+            max_k = max(1, max_k) # ensure at least 1
+            for k in range(1, max_k + 1):
+                combos = list(itertools.combinations(nodes, k))
+                np.random.shuffle(combos)
+                for combo in combos:
+                    queue.append((combo if k > 1 else combo[0], depth))
+            return queue
+
+        active_queue = generate_queue(list(self.graph.nodes), 1, max_moving_parts)
+        inactive_queue = [] 
 
         if verbose:
             print(f'Initial active queue: {active_queue}')
@@ -272,18 +300,24 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
 
             all_ids = list(self.graph.nodes)
             move_id, max_depth = active_queue.pop(0)
+            
             still_ids = all_ids.copy()
-            still_ids.remove(move_id)
-            assemblable = True
+            if isinstance(move_id, tuple):
+                for m_id in move_id:
+                    still_ids.remove(m_id)
+                move_id_str = '_'.join(move_id)
+            else:
+                still_ids.remove(move_id)
+                move_id_str = str(move_id)
 
             record_path = None
             if record_dir is None:
                 record_path = None
             elif render:
-                record_path = os.path.join(record_dir, f'{self.assembly_id}', f'{seq_count}_{move_id}.gif')
+                record_path = os.path.join(record_dir, f'{self.assembly_id}', f'{seq_count}_{move_id_str}.gif')
 
             if save_dir is not None:
-                curr_save_dir = os.path.join(save_dir, f'{self.assembly_id}', f'{seq_count}_{move_id}')
+                curr_save_dir = os.path.join(save_dir, f'{self.assembly_id}', f'{seq_count}_{move_id_str}')
             else:
                 curr_save_dir = None
 
@@ -291,24 +325,32 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
 
             status, t_plan = self.plan_path(move_id, still_ids,
                 path_planner_name, False, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-                path_max_time, max_depth, curr_seed, render, record_path, curr_save_dir, n_save_state, verbose=verbose)
+                path_max_time, max_depth, curr_seed, render, record_path, curr_save_dir, n_save_state, verbose=verbose, two_angles=two_angles)
             assert status in self.valid_status
             
             if status in self.failure_status and rotation:
                 status, t_plan_rot = self.plan_path(move_id, still_ids,
                     path_planner_name, True, body_type, sdf_dx, collision_th, force_mag, frame_skip,
-                    path_max_time, max_depth, curr_seed, render, record_path, curr_save_dir, n_save_state, verbose=verbose)
+                    path_max_time, max_depth, curr_seed, render, record_path, curr_save_dir, n_save_state, verbose=verbose, two_angles=two_angles)
                 t_plan += t_plan_rot
 
             t_plan_all += t_plan
             seq_count += 1
 
             if verbose:
-                print(f'# trials: {seq_count} | Move id: {move_id} | Status: {status} | Current planning time: {t_plan} | Total planning time: {t_plan_all}')
+                print(f'# trials: {seq_count} | Move id: {move_id_str} | Status: {status} | Current planning time: {t_plan} | Total planning time: {t_plan_all}')
             
             if status in self.success_status:
-                self.graph.remove_node(move_id)
+                if isinstance(move_id, tuple):
+                    for m_id in move_id:
+                        self.graph.remove_node(m_id)
+                else:
+                    self.graph.remove_node(move_id)
                 sequence.append(move_id)
+                
+                # Regenerate queue for remaining parts starting at depth 1
+                active_queue = generate_queue(list(self.graph.nodes), 1, max_moving_parts)
+                inactive_queue = []
             else:
                 inactive_queue.append([move_id, max_depth + 1])
 
@@ -316,7 +358,7 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
                 print('Active queue:', active_queue)
                 print('Inactive queue:', inactive_queue)
 
-            if len(self.graph.nodes) == 1:
+            if len(self.graph.nodes) <= 1:
                 seq_status = 'Success'
                 break
 
@@ -336,7 +378,7 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
                 break
 
         if verbose:
-            print(f'Result: {seq_status} | Disassembled: {len(sequence)}/{self.num_parts - 1} | Total # trials: {seq_count} | Total planning time: {t_plan_all}')
+            print(f'Result: {seq_status} | Disassembled: {len(sequence)} | Total # trials: {seq_count} | Total planning time: {t_plan_all}')
             print(f'Sequence: {sequence}')
 
         return seq_status, sequence, seq_count, t_plan_all, assemblable
@@ -369,6 +411,7 @@ if __name__ == '__main__':
     parser.add_argument('--seq-max-time', type=float, default=3600, help='sequence planning timeout')
     parser.add_argument('--path-max-time', type=float, default=120, help='path planning timeout')
     parser.add_argument('--seed', type=int, default=1, help='random seed')
+    parser.add_argument('--max-moving-parts', type=int, default=1, help='max number of parts to move simultaneously')
     parser.add_argument('--render', default=False, action='store_true', help='if render the result')
     parser.add_argument('--record-dir', type=str, default=None, help='directory to store rendering results')
     parser.add_argument('--save-dir', type=str, default=None)
@@ -391,6 +434,6 @@ if __name__ == '__main__':
     seq_planner = get_seq_planner(args.seq_planner)(asset_folder, assembly_dir)
     seq_status, sequence, seq_count, t_plan, assemblable = seq_planner.plan_sequence(args.path_planner, 
         args.rotation, args.body_type, args.sdf_dx, args.collision_th, args.force_mag, args.frame_skip,
-        args.seq_max_time, args.path_max_time, args.seed, args.render, args.record_dir, args.save_dir, args.n_save_state, verbose=args.verbose, max_iterations=args.max_iterations)
+        args.seq_max_time, args.path_max_time, args.seed, args.render, args.record_dir, args.save_dir, args.n_save_state, verbose=args.verbose, max_iterations=args.max_iterations, max_moving_parts=args.max_moving_parts)
     #clear_saved_sdfs(assembly_dir)
     print(f'Final result for assembly {args.id}: {seq_status} | Sequence: {sequence} | Assemblable: {assemblable}')
