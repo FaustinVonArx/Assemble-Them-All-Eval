@@ -37,7 +37,7 @@ class SequencePlanner:
         self.max_seq_count = (1 + self.num_parts) * self.num_parts // 2 - 1
 
         self.success_status = ['Success', 'Start with goal']
-        self.failure_status = ['Timeout', 'Failure']
+        self.failure_status = ['Timeout', 'Failure', 'Rigid']
         self.valid_status = self.success_status + self.failure_status
 
     def draw_graph(self):
@@ -251,7 +251,7 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
         path_planner = get_path_planner(planner_name)(
             self.asset_folder, self.assembly_dir,
             move_id_for_planner, still_ids,
-            rotation, body_type, sdf_dx, collision_th, force_mag, frame_skip, save_sdf=True
+            rotation, body_type, sdf_dx, collision_th, force_mag, frame_skip, save_sdf=True, color_scheme='max_contrast'
         )
         status, t_plan, path = path_planner.plan(max_time, max_depth=max_depth, seed=seed, return_path=True, render=render, record_path=record_path, verbose=verbose, two_angles=two_angles)
 
@@ -273,11 +273,10 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
         if render and record_dir is not None:
             os.makedirs(record_dir, exist_ok=True)
 
-        seq_status = 'Failure'
+        seq_status = 'Rigid'
         sequence = []
         seq_count = 0
         t_plan_all = 0
-        assemblable = True
 
         def generate_queue(nodes, depth, max_moving):
             queue = []
@@ -358,11 +357,18 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
                 print('Active queue:', active_queue)
                 print('Inactive queue:', inactive_queue)
 
+            if status != 'Rigid': # we want to check if every part is rigid
+                seq_status = status
+
             if len(self.graph.nodes) <= 1:
                 seq_status = 'Success'
                 break
 
             if len(active_queue) == 0:
+                if seq_status == 'Rigid':
+                    print('A subset of the assembly is completely rigid. Terminating.')
+                    seq_status = 'Failure'
+                    break
                 active_queue = inactive_queue.copy()
                 inactive_queue = []
 
@@ -374,14 +380,13 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
                 if verbose:
                     print(f'Max iterations ({max_iterations}) exceeded for all remaining parts. Terminating.')
                 seq_status = 'Timeout'
-                assemblable = False
                 break
 
         if verbose:
             print(f'Result: {seq_status} | Disassembled: {len(sequence)} | Total # trials: {seq_count} | Total planning time: {t_plan_all}')
             print(f'Sequence: {sequence}')
 
-        return seq_status, sequence, seq_count, t_plan_all, assemblable
+        return seq_status, sequence, seq_count, t_plan_all
 
 
 def get_seq_planner(name):
@@ -432,8 +437,8 @@ if __name__ == '__main__':
     if args.verbose:
         print(f'Running sequence planner')
     seq_planner = get_seq_planner(args.seq_planner)(asset_folder, assembly_dir)
-    seq_status, sequence, seq_count, t_plan, assemblable = seq_planner.plan_sequence(args.path_planner, 
+    seq_status, sequence, seq_count, t_plan = seq_planner.plan_sequence(args.path_planner, 
         args.rotation, args.body_type, args.sdf_dx, args.collision_th, args.force_mag, args.frame_skip,
         args.seq_max_time, args.path_max_time, args.seed, args.render, args.record_dir, args.save_dir, args.n_save_state, verbose=args.verbose, max_iterations=args.max_iterations, max_moving_parts=args.max_moving_parts)
     #clear_saved_sdfs(assembly_dir)
-    print(f'Final result for assembly {args.id}: {seq_status} | Sequence: {sequence} | Assemblable: {assemblable}')
+    print(f'Final result for assembly {args.id}: {seq_status} | Sequence: {sequence}')

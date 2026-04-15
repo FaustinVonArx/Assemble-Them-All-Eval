@@ -22,6 +22,8 @@ from assets.transform import transform_pts_by_state
 from assets.mesh_distance import compute_move_mesh_distance
 from utils.renderer import SimRenderer
 
+class Breakout(Exception): #Used to break out of nested loops when timeout is reached
+    pass
 
 class State:
 
@@ -137,12 +139,12 @@ def arr_to_str(arr):
     return ' '.join([str(x) for x in arr])
 
 
-def get_xml_string(assembly_dir, move_ids, still_ids, move_joint_type, body_type, sdf_dx, col_th, save_sdf):
+def get_xml_string(assembly_dir, move_ids, still_ids, move_joint_type, body_type, sdf_dx, col_th, save_sdf, color_scheme='max_contrast'):
     part_ids = load_part_ids(assembly_dir)
     translation = load_translation(assembly_dir)
     if translation is None: translation = {part_id: [0, 0, 0] for part_id in part_ids}
     body_type = body_type.upper()
-    color_map = get_color(part_ids)
+    color_map = get_color(part_ids, scheme=color_scheme)
     sdf_args = 'load_sdf="true" save_sdf="true"' if save_sdf else ''
     string = f'''
 <redmax model="assemble">
@@ -202,14 +204,14 @@ def unit_vector(vector):
 class PhysicsPlanner:
 
     def __init__(self, asset_folder, assembly_dir, move_ids, still_ids, 
-        rotation=False, body_type='bvh', sdf_dx=0.05, collision_th=0.01, force_mag=1e3, frame_skip=100, save_sdf=False):
+        rotation=False, body_type='bvh', sdf_dx=0.05, collision_th=0.01, force_mag=1e3, frame_skip=100, save_sdf=False, color_scheme='max_contrast'):
 
         if isinstance(move_ids, str) or isinstance(move_ids, int):
             move_ids = [str(move_ids)]
         else:
             move_ids = [str(m) for m in move_ids]
 
-        # calculate colli   sion threshold
+        # calculate collision threshold
         meshes, names = load_assembly(assembly_dir, return_names=True)
         move_meshes = []
         still_meshes = []
@@ -235,7 +237,7 @@ class PhysicsPlanner:
         
         # build simulation
         move_joint_type = 'free3d-exp' if rotation else 'translational'
-        model_string = get_xml_string(assembly_dir, move_ids, still_ids, move_joint_type, body_type, sdf_dx, collision_th, save_sdf)
+        model_string = get_xml_string(assembly_dir, move_ids, still_ids, move_joint_type, body_type, sdf_dx, collision_th, save_sdf, color_scheme=color_scheme)
         self.sim = redmax.Simulation(model_string, asset_folder)
         self.rotation = rotation
         self.ndof = 6 if rotation else 3
@@ -702,7 +704,7 @@ class BFSPlanner(PhysicsPlanner):
         ])
         # actions = self.random_rotate_actions(actions)
 
-        status = 'Failure'
+        status = 'Rigid'
         path = None
 
         t_start = time()
@@ -715,72 +717,72 @@ class BFSPlanner(PhysicsPlanner):
         if verbose:
             print(f'Starting BFS with max_time {max_time}s, max_depth {max_depth}, seed {seed}')
 
-        while True: # stages
+        try:
+            while True: # stages
 
-            state, curr_path = states.pop(0)
+                state, curr_path = states.pop(0)
 
-            for action in actions:
+                for action in actions:
 
-                if verbose:
-                    print(f'Stage {n_stages}, action {action}, queue size {len(states)}')
-                    
-                temp_path = curr_path.copy()
-                visited = False
-
-                self.sim.reset()
-                self.set_state(state)
-                self.apply_action(action)
-
-                while True:
-
-                    self.set_state(self.get_state())
-
-                    for _ in range(self.frame_skip):
-                        self.sim.forward(1, verbose=False)
-                        new_state = self.get_state()
-                        temp_path.append(new_state.q)
-
-                        t_plan = time() - t_start
-                        if t_plan > max_time:
-                            status = 'Timeout'
-                            break
-
-                    if self.is_disassembled():
-                        status = 'Success'
-                        path = temp_path
-                        if verbose:
-                            print(f'Success at stage {n_stages}, action {action}, time {t_plan:.2f}s')
-                        break
-
-                    if status == 'Timeout':
-                        break
-
-                    visited = self.any_state_similar(temp_path[:-self.frame_skip], new_state.q)
-                    if visited:
-                        if verbose:
-                            print(f'Revisited state at stage {n_stages}, action {action}, time {t_plan:.2f}s')
-                        break # back and forth
-
-                if status in ['Success', 'Timeout']:
-                    break
-
-                if not visited:
-                    states.append([new_state, temp_path])
                     if verbose:
-                        print(f'Stage {n_stages}: added new state, queue size {len(states)}')
+                        print(f'Stage {n_stages}, action {action}, queue size {len(states)}')
+                        
+                    temp_path = curr_path.copy()
+                    visited = False
 
-            if status in ['Success', 'Timeout']:
-                break
+                    self.sim.reset()
+                    self.set_state(state)
+                    self.apply_action(action)
 
-            if verbose:
-                print(f'Completed stage {n_stages}')
-            n_stages += 1
-            if n_stages == max_depth:
-                break
-            if len(states) == 0: #Explored all states and made no progress => Not assemblable
+                    while True: # Keep attempting same action until timeout or success or back-and-forth
+                        self.set_state(self.get_state())
+                        temp_path.append(self.get_state().q)
+                        for _ in range(self.frame_skip):
+                            self.sim.forward(1, verbose=False)
+                            new_state = self.get_state()
+                            temp_path.append(new_state.q)
+
+                            t_plan = time() - t_start
+                            if t_plan > max_time:
+                                status = 'Timeout'
+                                break
+
+                        if self.is_disassembled():
+                            status = 'Success'
+                            path = temp_path
+                            if verbose:
+                                print(f'Success at stage {n_stages}, action {action}, time {t_plan:.2f}s')
+                            raise Breakout
+
+                        visited = self.any_state_similar(temp_path[:-self.frame_skip], new_state.q)
+                        if visited:
+                            if verbose:
+                                print(f'Revisited state at stage {n_stages}, action {action}, time {t_plan:.2f}s')
+                            break # back and forth
+                        else:
+                            if verbose:
+                                print(f'New state at stage {n_stages}, action {action}, time {t_plan:.2f}s')
+                            status = 'Failure' # part can be moved but not disassembled => apply same action again
+
+                        if status == 'Timeout':
+                            raise Breakout
+
+                    if not visited:
+                        states.append([new_state, temp_path])
+                        if verbose:
+                            print(f'Stage {n_stages}: added new state, queue size {len(states)}')
+
                 if verbose:
-                    print(f'No more states to explore at stage {n_stages}, terminating with failure')
-                break
+                    print(f'Completed stage {n_stages}')
+                n_stages += 1
+                if n_stages == max_depth:
+                    break
+                if len(states) == 0: #Explored all states and made no progress => Not assemblable
+                    if verbose:
+                        print(f'No more states to explore at stage {n_stages}, terminating with status {status}')
+                    break
+        except Breakout:
+            pass
 
         if render:
             if verbose:
@@ -816,7 +818,7 @@ class BFSPlanner(PhysicsPlanner):
         ])
         # actions = self.random_rotate_actions(actions)
 
-        status = 'Failure'
+        status = 'Rigid'
         path = None
 
         t_start = time()
@@ -829,81 +831,77 @@ class BFSPlanner(PhysicsPlanner):
         if verbose:
             print(f'Starting BFS (rot) with max_time {max_time}s, max_depth {max_depth}, seed {seed}')
 
+        try:
+            while True: # stages
 
-        while True: # stages
+                stage_states = []
 
-            stage_states = []
+                while len(states) > 0:
 
-            while len(states) > 0:
+                    state, curr_path = states.pop(0)
 
-                state, curr_path = states.pop(0)
+                    for action in actions:
 
-                for action in actions:
-
-                    if verbose:
-                        print(f'Stage {n_stages}, action {action}, queue size {len(states)}')
-                    
-                    temp_path = curr_path.copy()
-                    visited = False
-
-                    self.sim.reset()
-                    self.set_state(state)
-                    self.apply_action(action)
-
-                    while True:
-
-                        self.set_state(self.get_state())
-
-                        for _ in range(self.frame_skip):
-                            self.sim.forward(1, verbose=False)
-                            new_state = self.get_state()
-                            temp_path.append(new_state.q)
-
-                            t_plan = time() - t_start
-                            if t_plan > max_time:
-                                status = 'Timeout'
-                                break
-
-                        if self.is_disassembled():
-                            status = 'Success'
-                            path = temp_path
-                            if verbose:
-                                print(f'Success at stage {n_stages}, action {action}, time {t_plan:.2f}s')
-                            break
-
-                        if status == 'Timeout':
-                            break
-
-                        visited = self.any_state_similar(temp_path[:-self.frame_skip], new_state.q)
-                        if visited:
-                            if verbose:
-                               print(f'Revisited state at stage {n_stages}, action {action}, time {t_plan:.2f}s')
-                            break # back and forth
-
-                    if status in ['Success', 'Timeout']:
-                        break
-
-                    if not visited:
-                        stage_states.append([new_state, temp_path])
                         if verbose:
-                            print(f'Stage {n_stages}: added new state, queue size {len(stage_states)}')
+                            print(f'Stage {n_stages}, action {action}, queue size {len(states)}')
+                        
+                        temp_path = curr_path.copy()
+                        visited = False
 
-                if status in ['Success', 'Timeout']:
-                    break
+                        self.sim.reset()
+                        self.set_state(state)
+                        self.apply_action(action)
 
-            if status in ['Success', 'Timeout']:
-                break
+                        while True:
 
-            if verbose:
-                print(f'Completed stage {n_stages}, queue size {len(stage_states)}')
-            n_stages += 1
-            if n_stages == max_depth:
-                break
-            if len(stage_states) == 0: #Explored all states and made no progress => Not disassemblable
+                            self.set_state(self.get_state())
+
+                            for _ in range(self.frame_skip):
+                                self.sim.forward(1, verbose=False)
+                                new_state = self.get_state()
+                                temp_path.append(new_state.q)
+
+                                t_plan = time() - t_start
+                                if t_plan > max_time:
+                                    status = 'Timeout'
+                                    break
+
+                            if self.is_disassembled():
+                                status = 'Success'
+                                path = temp_path
+                                if verbose:
+                                    print(f'Success at stage {n_stages}, action {action}, time {t_plan:.2f}s')
+                                raise Breakout
+
+                            if status == 'Timeout':
+                                raise Breakout
+
+                            visited = self.any_state_similar(temp_path[:-self.frame_skip], new_state.q)
+                            if visited:
+                                if verbose:
+                                    print(f'Revisited state at stage {n_stages}, action {action}, time {t_plan:.2f}s')
+                                break # back and forth
+                            else:
+                                status = 'Failure' # part can be moved but not disassembled => apply same action again
+
+                        if not visited:
+                            stage_states.append([new_state, temp_path])
+                            if verbose:
+                                print(f'Stage {n_stages}: added new state, queue size {len(stage_states)}')
+
                 if verbose:
-                    print(f'No more states to explore at stage {n_stages}, terminating with failure')
-                break
-            states = sorted(stage_states, key=lambda x: -len(x[1])) # sort based on path length
+                    print(f'Completed stage {n_stages}, queue size {len(stage_states)}')
+                n_stages += 1
+                if n_stages == max_depth:
+                    break
+                if len(stage_states) == 0: #Explored all states and made no progress => Not disassemblable
+                    if verbose:
+                        print(f'No more states to explore at stage {n_stages}, terminating with failure')
+                    break
+                states = sorted(stage_states, key=lambda x: -len(x[1])) # sort based on path length
+
+        except Breakout:
+            pass
 
         if render:
             self.render(path, record_path=record_path)
