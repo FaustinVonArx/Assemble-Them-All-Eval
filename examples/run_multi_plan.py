@@ -14,6 +14,7 @@ from assets.save import clear_saved_sdfs
 from .run_joint_plan import get_planner as get_path_planner
 
 import time
+import settings
 
 
 class SequencePlanner:
@@ -251,7 +252,7 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
         path_planner = get_path_planner(planner_name)(
             self.asset_folder, self.assembly_dir,
             move_id_for_planner, still_ids,
-            rotation, body_type, sdf_dx, collision_th, force_mag, frame_skip, save_sdf=True, color_scheme='max_contrast'
+            rotation, body_type, sdf_dx, collision_th, force_mag, frame_skip, save_sdf=True, color_scheme=settings.color_scheme
         )
         status, t_plan, path = path_planner.plan(max_time, max_depth=max_depth, seed=seed, return_path=True, render=render, record_path=record_path, verbose=verbose, two_angles=two_angles)
 

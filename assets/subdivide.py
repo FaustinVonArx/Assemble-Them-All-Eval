@@ -8,7 +8,7 @@ import numpy as np
 import trimesh
 from sortedcontainers import SortedKeyList
 
-from load import load_assembly
+from .load import load_assembly
 
 
 def subdivide_to_size(mesh, max_edge):

@@ -227,7 +227,7 @@ class PhysicsPlanner:
                 move_meshes.append(phys_mesh)
             elif obj_id in still_ids:
                 still_meshes.append(phys_mesh)
-        
+
         min_d = np.inf
         for move_mesh in move_meshes:
             d = compute_move_mesh_distance(move_mesh, still_meshes, state=np.zeros(3))
@@ -760,8 +760,8 @@ class BFSPlanner(PhysicsPlanner):
                                 print(f'Revisited state at stage {n_stages}, action {action}, time {t_plan:.2f}s')
                             break # back and forth
                         else:
-                            if verbose:
-                                print(f'New state at stage {n_stages}, action {action}, time {t_plan:.2f}s')
+                            #if verbose:
+                            #    print(f'New state at stage {n_stages}, action {action}, time {t_plan:.2f}s')
                             status = 'Failure' # part can be moved but not disassembled => apply same action again
 
                         if status == 'Timeout':
@@ -785,6 +785,8 @@ class BFSPlanner(PhysicsPlanner):
             pass
 
         if render:
+            self.sim.viewer_options.camera_pos = np.array([1.0, -1.0, 1.0])
+            self.sim.viewer_options.camera_lookat = np.array([0.0, 0.0, 0.0])
             if verbose:
                 print("rendering...")
             self.render(path, record_path=record_path)
