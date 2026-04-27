@@ -208,7 +208,7 @@ class QueueSequencePlanner(SequencePlanner):
                 self.graph.remove_node(move_id)
                 sequence.append(move_id)
             else:
-                inactive_queue.append([move_id, max_depth + 1])
+                inactive_queue.append([move_id])
 
             if verbose:
                 print('Active queue:', active_queue)
@@ -363,6 +363,8 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
 
             if len(self.graph.nodes) <= 1:
                 seq_status = 'Success'
+                last_id, _ = active_queue.pop(0)
+                sequence.append(last_id) # add the last part
                 break
 
             if len(active_queue) == 0:
@@ -372,6 +374,7 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
                     break
                 active_queue = inactive_queue.copy()
                 inactive_queue = []
+                seq_status = 'Rigid' # reset to check rigidity for the new queue
 
             if t_plan_all > seq_max_time:
                 seq_status = 'Timeout'
@@ -436,7 +439,7 @@ if __name__ == '__main__':
         clear_saved_sdfs(assembly_dir)
 
     if args.verbose:
-        print(f'Running sequence planner')
+        print("Running sequence planner")
     seq_planner = get_seq_planner(args.seq_planner)(asset_folder, assembly_dir)
     seq_status, sequence, seq_count, t_plan = seq_planner.plan_sequence(args.path_planner, 
         args.rotation, args.body_type, args.sdf_dx, args.collision_th, args.force_mag, args.frame_skip,
