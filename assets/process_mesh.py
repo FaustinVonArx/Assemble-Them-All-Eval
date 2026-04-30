@@ -26,7 +26,7 @@ def com_to_transform(com):
     return transform
 
 
-def normalize(meshes, bbox_size=10):
+def normalize(meshes, bbox_size=10, return_factors=False):
 
     # compute normalization factors
     vertex_all_stacked = np.vstack([mesh.vertices for mesh in meshes])
@@ -40,7 +40,7 @@ def normalize(meshes, bbox_size=10):
     # normalization
     for mesh in meshes:
         mesh.apply_transform(scale_transform)
-    return meshes
+    return meshes, (center, scale_factor) if return_factors else meshes
 
 
 def get_oriented_bounding_box(mesh):
@@ -79,7 +79,10 @@ def process_mesh(source_dir, target_dir, subdivide, max_edge=0.5, verbose=False)
         return False
 
     # scale
-    meshes = normalize(meshes)
+    meshes, factors = normalize(meshes, return_factors=True)
+    os.makedirs(target_dir, exist_ok=True)
+    with open(os.path.join(target_dir, 'normalization.json'), 'w') as f:
+        json.dump({'center': factors[0].tolist(), 'scale': float(factors[1])}, f)
 
     # subdivide mesh
     if subdivide:

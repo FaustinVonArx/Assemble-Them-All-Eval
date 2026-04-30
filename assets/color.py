@@ -2,9 +2,12 @@
 Predefined colors for assembly meshes
 '''
 
-import numpy as np
-import distinctipy
 import itertools
+
+import distinctipy
+import numpy as np
+
+import settings
 
 
 def get_color(part_ids, normalize=True, scheme='default'):
@@ -27,10 +30,17 @@ def get_color(part_ids, normalize=True, scheme='default'):
         if normalize: colors = colors.astype(float) / 255.0
     
     elif scheme=="distinctipy": # Based on CAM02-UCS, which maximizes distinguishability for the human eye
-        raw_colors = distinctipy.get_colors(len(part_ids), exclude_colors=[(0, 0, 0), (1, 1, 1)])
-        colors = []
-        for r, g, b in raw_colors:
-            colors.append([int(r * 255), int(g * 255), int(b * 255), 255])
+        raw_colors = distinctipy.get_colors(len(part_ids))
+
+        colors = np.zeros((len(part_ids), 4))
+        for i, (r, g, b) in enumerate(raw_colors):
+            colors[i] = [r, g, b, settings.alpha]
+        colors[:, 3] *= settings.brightness
+
+        if not normalize:
+            colors = (raw_colors * 255).astype(int)
+
+        colors = np.array(colors)
 
     elif scheme=="max_contrast": # Maximize mathematical contrast, might be better for VLM
         values = [0, 128, 255]
@@ -38,7 +48,7 @@ def get_color(part_ids, normalize=True, scheme='default'):
         rgb_combinations = list(itertools.product(values, repeat=3))
         filtered_rgb = [rgb for rgb in rgb_combinations if rgb not in [(0, 0, 0), (255, 255, 255)]] # remove black and white
         sorted_rgb = sorted(filtered_rgb, key=lambda x: x.count(128)) # Have most extreme colors (like 255 0 0) be at the top
-        colors = [[r, g, b, 255] for r, g, b in sorted_rgb]
+        colors = [[r, g, b, int(settings.opacity * 255)] for r, g, b in sorted_rgb]
 
     for i, part_id in enumerate(part_ids):
         color_map[part_id] = colors[i % len(colors)]
