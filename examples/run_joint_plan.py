@@ -139,7 +139,7 @@ def arr_to_str(arr):
     return ' '.join([str(x) for x in arr])
 
 
-def get_xml_string(assembly_dir, move_ids, still_ids, move_joint_type, body_type, sdf_dx, col_th, save_sdf, color_scheme='max_contrast'):
+def get_xml_string(assembly_dir, move_ids, still_ids, move_joint_type, body_type, sdf_dx, col_th, save_sdf, color_scheme='distinctipy', gravity=1e-12, friction=0.0, ground=None):
     part_ids = load_part_ids(assembly_dir)
     translation = load_translation(assembly_dir)
     if translation is None: translation = {part_id: [0, 0, 0] for part_id in part_ids}
@@ -148,18 +148,27 @@ def get_xml_string(assembly_dir, move_ids, still_ids, move_joint_type, body_type
     sdf_args = 'load_sdf="true" save_sdf="true"' if save_sdf else ''
     string = f'''
 <redmax model="assemble">
-<option integrator="BDF1" timestep="1e-3" gravity="0. 0. 1e-12"/>
+<option integrator="BDF1" timestep="1e-3" gravity="0. 0. {gravity}"/>
 <render bg_color="255 255 255 255"/>
-
+'''
+    if ground is not None:
+        string += f'''
+<ground pos="0 0 {ground}" normal="0 0 1"/>
+'''
+    string += f'''
 <default>
-    <general_{body_type}_contact kn="1e6" kt="1e3" mu="0" damping="0"/>
-</default>
+    <general_{body_type}_contact kn="1e6" kt="1e3" mu="{friction}" damping="0"/>
+'''
+    if ground is not None:
+        string += '''    <ground_contact kn="1e6" kt="1e3" mu="0.8" damping="5e1"/>
+'''
+    string += '''</default>
 '''
     if isinstance(move_ids, str) or isinstance(move_ids, int):
         move_ids = [str(move_ids)]
     else:
         move_ids = [str(x) for x in move_ids]
-    
+
     for part_id in [*move_ids, *still_ids]:
         joint_type = move_joint_type if part_id in move_ids else 'fixed'
         string += f'''
@@ -172,6 +181,11 @@ def get_xml_string(assembly_dir, move_ids, still_ids, move_joint_type, body_type
 '''
     string += f'''
 <contact>
+'''
+    if ground is not None:
+        for part_id in [*move_ids, *still_ids]:
+            string += f'''
+    <ground_contact body="part{part_id}"/>
 '''
     for part_id in still_ids:
         for move_id in move_ids:
@@ -203,41 +217,43 @@ def unit_vector(vector):
 
 class PhysicsPlanner:
 
-    def __init__(self, asset_folder, assembly_dir, move_ids, still_ids, 
-        rotation=False, body_type='bvh', sdf_dx=0.05, collision_th=0.01, force_mag=1e3, frame_skip=100, save_sdf=False, color_scheme='max_contrast'):
+    def __init__(self, asset_folder, assembly_dir, move_ids, still_ids,
+        rotation=False, body_type='bvh', sdf_dx=0.05, collision_th=0.01, force_mag=1e3, frame_skip=100, save_sdf=False, color_scheme='default', gravity=1e-12, friction=0.0, ground=None):
 
         if isinstance(move_ids, str) or isinstance(move_ids, int):
             move_ids = [str(move_ids)]
         else:
             move_ids = [str(m) for m in move_ids]
 
-        # calculate collision threshold
-        meshes, names = load_assembly(assembly_dir, return_names=True)
-        move_meshes = []
-        still_meshes = []
-        for mesh, name in zip(meshes, names):
-            obj_id = name.replace('.obj', '')
-            if body_type == 'bvh':
-                phys_mesh = redmax.BVHMesh(mesh.vertices.T, mesh.faces.T)
-            elif body_type == 'sdf':
-                phys_mesh = redmax.SDFMesh(mesh.vertices.T, mesh.faces.T, sdf_dx)
-            else:
-                raise NotImplementedError
-            if obj_id in move_ids:
-                move_meshes.append(phys_mesh)
-            elif obj_id in still_ids:
-                still_meshes.append(phys_mesh)
+        # calculate collision threshold (skip when there are no still parts)
+        if still_ids:
+            meshes, names = load_assembly(assembly_dir, return_names=True)
+            move_meshes = []
+            still_meshes = []
+            for mesh, name in zip(meshes, names):
+                obj_id = name.replace('.obj', '')
+                if body_type == 'bvh':
+                    phys_mesh = redmax.BVHMesh(mesh.vertices.T, mesh.faces.T)
+                elif body_type == 'sdf':
+                    phys_mesh = redmax.SDFMesh(mesh.vertices.T, mesh.faces.T, sdf_dx)
+                else:
+                    raise NotImplementedError
+                if obj_id in move_ids:
+                    move_meshes.append(phys_mesh)
+                elif obj_id in still_ids:
+                    still_meshes.append(phys_mesh)
 
-        min_d = np.inf
-        for move_mesh in move_meshes:
-            d = compute_move_mesh_distance(move_mesh, still_meshes, state=np.zeros(3))
-            if d < min_d: min_d = d
+            min_d = np.inf
+            for move_mesh in move_meshes:
+                d = compute_move_mesh_distance(move_mesh, still_meshes, state=np.zeros(3))
+                if d < min_d:
+                    min_d = d
 
-        collision_th = max(-min_d, 0) + collision_th
-        
+            collision_th = max(-min_d, 0) + collision_th
+
         # build simulation
         move_joint_type = 'free3d-exp' if rotation else 'translational'
-        model_string = get_xml_string(assembly_dir, move_ids, still_ids, move_joint_type, body_type, sdf_dx, collision_th, save_sdf, color_scheme=color_scheme)
+        model_string = get_xml_string(assembly_dir, move_ids, still_ids, move_joint_type, body_type, sdf_dx, collision_th, save_sdf, color_scheme=color_scheme, gravity=gravity, friction=friction, ground=ground)
         self.sim = redmax.Simulation(model_string, asset_folder)
         self.rotation = rotation
         self.ndof = 6 if rotation else 3
@@ -249,31 +265,43 @@ class PhysicsPlanner:
         # Compatibility properties for single move_id functions
         self.move_id = move_ids[0] if len(move_ids) > 0 else None
         self.move_name = f'part{self.move_id}' if self.move_id else None
-        
+
         self.move_names = [f'part{mid}' for mid in move_ids]
         self.still_names = [f'part{still_id}' for still_id in still_ids]
 
-        #print("Starting collisions check")
         # collision check
         self.vertices_move = np.vstack([self.sim.get_body_vertices(name).T for name in self.move_names])
-        self.vertices_still = np.vstack([self.sim.get_body_vertices(still_name, world_frame=True).T for still_name in self.still_names])
         self.hull_move = trimesh.convex.convex_hull(self.vertices_move)
-        self.hull_still = trimesh.convex.convex_hull(self.vertices_still)
         self.collision_manager = trimesh.collision.CollisionManager()
-        self.collision_manager.add_object('hull_still', self.hull_still)
+
+        if still_ids:
+            self.vertices_still = np.vstack([self.sim.get_body_vertices(still_name, world_frame=True).T for still_name in self.still_names])
+            self.hull_still = trimesh.convex.convex_hull(self.vertices_still)
+            self.collision_manager.add_object('hull_still', self.hull_still)
+        else:
+            self.vertices_still = np.empty((0, 3))
+            self.hull_still = None
 
         self.E0i_move = self.sim.get_body_E0i(self.move_names[0])
         self.E0is_still = [self.sim.get_body_E0i(still_name) for still_name in self.still_names]
-        
+
         # state bounds
         self.min_box_move = self.vertices_move.min(axis=0)
         self.max_box_move = self.vertices_move.max(axis=0)
         self.size_box_move = self.max_box_move - self.min_box_move
-        self.min_box_still = self.vertices_still.min(axis=0)
-        self.max_box_still = self.vertices_still.max(axis=0)
-        self.size_box_still = self.max_box_still - self.min_box_still
-        self.state_lower_bound = (self.min_box_still - self.max_box_move) - 0.5 * self.size_box_move
-        self.state_upper_bound = (self.max_box_still - self.min_box_move) + 0.5 * self.size_box_move
+
+        if still_ids:
+            self.min_box_still = self.vertices_still.min(axis=0)
+            self.max_box_still = self.vertices_still.max(axis=0)
+            self.size_box_still = self.max_box_still - self.min_box_still
+            self.state_lower_bound = (self.min_box_still - self.max_box_move) - 0.5 * self.size_box_move
+            self.state_upper_bound = (self.max_box_still - self.min_box_move) + 0.5 * self.size_box_move
+        else:
+            self.min_box_still = None
+            self.max_box_still = None
+            self.size_box_still = None
+            self.state_lower_bound = self.min_box_move - self.size_box_move
+            self.state_upper_bound = self.max_box_move + self.size_box_move
 
     def get_state(self):
         qs = [self.sim.get_joint_q(move_name) for move_name in self.move_names]
@@ -310,7 +338,8 @@ class PhysicsPlanner:
             force = np.concatenate([action[:3] * 3, action[3:]])
         else:
             raise Exception
-        self.sim.set_body_external_force(self.move_name, force)
+        for move_name in self.move_names:
+            self.sim.set_body_external_force(move_name, force)
 
     def q_distance(self, q0, q1):
         if self.rotation:
@@ -324,6 +353,8 @@ class PhysicsPlanner:
         return self.q_distance(state0.q, state1.q)
 
     def is_disassembled(self):
+        if not self.still_ids:
+            return True
         if len(self.move_names) == 1:
             E0i = self.sim.get_body_E0i(self.move_names[0])
             hull_move = self.hull_move.copy()
@@ -333,7 +364,7 @@ class PhysicsPlanner:
                 min_box_move, max_box_move = hull_move.vertices.min(axis=0), hull_move.vertices.max(axis=0)
                 move_contain_still = (min_box_move <= self.min_box_still).all() and (max_box_move >= self.max_box_still).all()
                 still_contain_move = (self.min_box_still <= min_box_move).all() and (self.max_box_still >= max_box_move).all()
-                return not (move_contain_still or still_contain_move) # check if one hull fully contains another
+                return not (move_contain_still or still_contain_move)
             else:
                 return False
         else:
@@ -564,131 +595,10 @@ class BFSPlanner(PhysicsPlanner):
         else:
             return self.plan_trans(*args, **kwargs)
 
-    def plan_multi(self, max_time, max_depth=None, seed=1, return_path=False, render=False, record_path=None, verbose=False, two_angles=False):
-        self.seed(seed)
-
-        import itertools
-        if self.rotation:
-            base_actions = np.array([
-                [0, 0, 0, 0, 0, 1], 
-                [0, 0, 0, 0, 0, -1],
-                [0, 0, 0, 0, 1, 0],
-                [0, 0, 0, 0, -1, 0],
-                [0, 0, 0, 1, 0, 0],
-                [0, 0, 0, -1, 0, 0],
-                [0, 0, 1, 0, 0, 0], 
-                [0, 0, -1, 0, 0, 0],
-                [0, 1, 0, 0, 0, 0],
-                [0, -1, 0, 0, 0, 0],
-                [1, 0, 0, 0, 0, 0],
-                [-1, 0, 0, 0, 0, 0],
-            ])
-        else:
-            base_actions = np.array([
-                [0, 0, 1], 
-                [0, 0, -1],
-                [0, 1, 0],
-                [0, -1, 0],
-                [1, 0, 0],
-                [-1, 0, 0],
-            ])
-        
-        actions = []
-        for p in itertools.product(base_actions, repeat=len(self.move_names)):
-            actions.append(np.concatenate(p))
-        actions = np.array(actions)
-
-        status = 'Failure'
-        path = None
-
-        from time import time
-        t_start = time()
-
-        self.sim.reset()
-        states = [[self.get_state(), []]]
-
-        n_stages = 0
-
-        if verbose:
-            print(f'Starting BFS with max_time {max_time}s, max_depth {max_depth}, seed {seed}')
-
-        while True: # stages
-
-            if len(states) == 0:
-                if verbose: print(f'No more states to explore at stage {n_stages}, terminating with failure')
-                break
-            state, curr_path = states.pop(0)
-
-            for action in actions:
-
-                if verbose:
-                    print(f'Stage {n_stages}, action {action}, queue size {len(states)}')
-                temp_path = curr_path.copy()
-                visited = False
-
-                self.sim.reset()
-                self.set_state(state)
-                self.apply_action(action)
-
-                while True:
-
-                    self.set_state(self.get_state())
-
-                    for _ in range(self.frame_skip):
-                        self.sim.forward(1, verbose=False)
-                        new_state = self.get_state()
-                        temp_path.append(new_state.q)
-
-                        t_plan = time() - t_start
-                        if t_plan > max_time:
-                            status = 'Timeout'
-                            break
-
-                    if self.is_disassembled():
-                        status = 'Success'
-                        path = temp_path
-                        if verbose:
-                            print(f'Success at stage {n_stages}, action {action}, time {t_plan:.2f}s')
-                        break
-
-                    if status == 'Timeout':
-                        break
-
-                    visited = self.any_state_similar(temp_path[:-self.frame_skip], new_state.q)
-                    if visited:
-                        if verbose:
-                            print(f'Revisited state at stage {n_stages}, action {action}, time {t_plan:.2f}s')
-                        break # back and forth
-
-                if status in ['Success', 'Timeout']:
-                    break
-
-                if not visited:
-                    states.append([new_state, temp_path])
-                    if verbose:
-                        print(f'Stage {n_stages}: added new state, queue size {len(states)}')
-
-            if status in ['Success', 'Timeout']:
-                break
-
-            if verbose:
-                print(f'Completed stage {n_stages}')
-            n_stages += 1
-            if max_depth is not None and n_stages == max_depth:
-                break
-
-        if render:
-            if verbose:
-                print("rendering...")
-            self.render(path, record_path=record_path)
-
-            if two_angles:
-                self.sim.viewer_options.camera_pos = np.array([-1.0, 1.0, -1.0])
-                self.sim.viewer_options.camera_lookat = np.array([0.0, 0.0, 0.0])
-
-                self.render(path, record_path=record_path.replace('.gif', '_opposite.gif'))
-
-        return (status, t_plan, path) if return_path else (status, t_plan)
+    def plan_multi(self, *args, **kwargs):
+        # All moving parts receive the same force direction (same-direction constraint).
+        # apply_action now iterates self.move_names, so plan_trans drives all parts correctly.
+        return self.plan_trans(*args, **kwargs)
 
     def plan_trans(self, max_time, max_depth=None, seed=1, return_path=False, render=False, record_path=None, verbose=False, two_angles=False):
 
@@ -761,13 +671,13 @@ class BFSPlanner(PhysicsPlanner):
                             break # back and forth
                         else:
                             #if verbose:
-                            #    print(f'New state at stage {n_stages}, action {action}, time {t_plan:.2f}s')
+                            print(f'New state at stage {n_stages}, action {action}, time {t_plan:.2f}s')
                             status = 'Failure' # part can be moved but not disassembled => apply same action again
 
                         if status == 'Timeout':
                             raise Breakout
 
-                    if not visited:
+                    if visited:
                         states.append([new_state, temp_path])
                         if verbose:
                             print(f'Stage {n_stages}: added new state, queue size {len(states)}')
@@ -886,7 +796,7 @@ class BFSPlanner(PhysicsPlanner):
                             else:
                                 status = 'Failure' # part can be moved but not disassembled => apply same action again
 
-                        if not visited:
+                        if visited:
                             stage_states.append([new_state, temp_path])
                             if verbose:
                                 print(f'Stage {n_stages}: added new state, queue size {len(stage_states)}')
