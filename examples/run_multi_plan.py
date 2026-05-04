@@ -258,7 +258,17 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
 
         assert status in self.valid_status, f'unknown status {status}'
         if save_dir is not None:
-            path_planner.save_path(path, save_dir, n_save_state)
+            move_ids = path_planner.move_ids
+            if len(move_ids) > 1 and path is not None:
+                # Combined state has length n_dof*n_parts (same-direction constraint).
+                # Split per-part so get_transform_matrix receives a valid 3-element state.
+                n_dof = path_planner.ndof
+                for i, mid in enumerate(move_ids):
+                    part_path = [state[i * n_dof:(i + 1) * n_dof] for state in path]
+                    part_save_dir = f'{save_dir}_{mid}'
+                    path_planner.save_path(part_path, part_save_dir, n_save_state)
+            else:
+                path_planner.save_path(path, save_dir, n_save_state)
 
         if return_contact:
             contact_parts = path_planner.get_contact_bodies(move_id_for_planner)
@@ -317,7 +327,7 @@ class ProgressiveQueueSequencePlanner(SequencePlanner):
                 record_path = os.path.join(record_dir, f'{self.assembly_id}', f'{seq_count}_{move_id_str}.gif')
 
             if save_dir is not None:
-                curr_save_dir = os.path.join(save_dir, f'{self.assembly_id}', f'{seq_count}_{move_id_str}')
+                curr_save_dir = os.path.join(save_dir, f'{self.assembly_id}', "paths", f'{seq_count}_{move_id_str}')
             else:
                 curr_save_dir = None
 
